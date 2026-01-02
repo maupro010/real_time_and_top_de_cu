@@ -52,7 +52,11 @@ jobs:
     # Buoc 6: Chay script Python
     - name: 6. Chay script Python
       env:
-        # Lấy thông tin proxy từ secrets và gán vào biến môi trường
+        # Quan trọng: Phải thêm 2 dòng này
+        LOGIN_EMAIL: ${{ secrets.LOGIN_EMAIL }}
+        LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
+        
+        # Các biến proxy hiện có
         PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
         PROXY_USER: ${{ secrets.PROXY_USER }}
         PROXY_PASS: ${{ secrets.PROXY_PASS }}
