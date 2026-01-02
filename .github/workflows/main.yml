@@ -5,7 +5,7 @@ name: Chay Script Scrape Hang giờ
 on:
   schedule:
     # Chạy theo lịch: 20:00 UTC (tức 03:00 giờ Việt Nam) mỗi ngày
-    - cron: '0 * * * *'
+    - cron: '0 */4 * * *'
     
   workflow_dispatch:
     # Thêm dòng này để cho phép bạn chạy thủ công (bằng tay)
