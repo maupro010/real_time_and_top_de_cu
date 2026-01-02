@@ -158,7 +158,7 @@ async def main():
         )
         context = await browser.new_context()
         page = await context.new_page()
-        page.set_default_timeout(10000) # 60 giây
+        page.set_default_timeout(60000) # 60 giây
         try:
             # --- PHẦN 1: ĐĂNG NHẬP (Chỉ chạy một lần) ---
             print("Bắt đầu quá trình đăng nhập...")
