@@ -1,297 +1,198 @@
 import asyncio
-from playwright.async_api import async_playwright
 import os
-import csv
-import gspread
 import re
+from playwright.async_api import async_playwright
+import gspread
 
-# --- THÔNG TIN ĐĂNG NHẬP ---
-LOGIN_EMAIL = os.environ.get('LOGIN_EMAIL')
-LOGIN_PASSWORD = os.environ.get('LOGIN_PASSWORD')
-# ------------------------------
-
-# --- THÔNG TIN GOOGLE SHEET ---
+# --- CẤU HÌNH ---
 GOOGLE_SHEET_NAME = "https://docs.google.com/spreadsheets/d/1rCGTw4GdGlR4K-H7hDk8TjjnGh1jL3NgNZLRQ_h8jY8/edit?usp=sharing"
 CREDENTIALS_FILE = "credentials.json"
-# ------------------------------
-async def scrape_novel_top(page):    
-    novels = []
-    for i in range(2, 22):
-        img_selector = f'#app > div:nth-child(2) > main > div > div.md\\:col-span-2.space-y-8 > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-shrink-0 > a > img'
-        title_selector = f'#app > div:nth-child(2) > main > div > div.md\\:col-span-2.space-y-8 > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-grow.space-y-2 > div.flex.items-center.space-x-2 > a'
-        author_selector = f'#app > div:nth-child(2) > main > div > div.md\\:col-span-2.space-y-8 > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-grow.space-y-2 > div.flex.justify-between.space-x-2.pt-1 > div > span'
-        max_selector = f'#app > div:nth-child(2) > main > div > div.md\\:col-span-2.space-y-8 > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-grow.space-y-2 > div.flex.justify-between.space-x-2.pt-1 > span'
 
-        try:
-            # 1. Ảnh: Nằm trong div.flex-shrink-0
-            img = await page.locator(img_selector).get_attribute('src')
-            
-            # 2. Tiêu đề: Thẻ a trong div.flex.items-center.space-x-2
-            title = await page.locator(title_selector).inner_text()
+BASE_URL = "https://sangtacviet.app"
+URL_REALTIME = BASE_URL + "/?find=&minc=0&sort=bookmarked&tag="
+URL_TOPWEEK = BASE_URL + "/?find=&minc=0&sort=viewweek&tag="
 
-            url = await page.locator(title_selector).get_attribute('href')
-            
-            # 3. Tác giả: Thẻ span đầu tiên trong cụm div cuối
-            author = await page.locator(author_selector).inner_text()
-            
-            # 4. Số chương: Thẻ span cuối cùng (thường là sibling của div chứa author)
-            max_chapter_text = await page.locator(max_selector).inner_text()
+PAGES = 3          # mỗi trang ~48 truyện -> 3 trang ~144 truyện
+MAX_ITEMS = 100    # cắt bớt còn đúng 100 truyện mỗi danh sách
+# -----------------
 
-            novels.append([
-                url.strip().split("/")[-1],
-                title.strip(),
-                author.strip(),
-                '',                
-                img.strip(),
-                max_chapter_text.strip(),
-                ''
-            ])
-        except Exception as e:
-            print(f"❌ Đã xảy ra lỗi nghiêm trọng: {e}")
-            continue
-    return novels
+# JS chạy trong trình duyệt để bóc dữ liệu từ các thẻ <a class="booksearch">
+EXTRACT_JS = """
+() => {
+    const parseNum = (t) => {
+        if (!t) return 0;
+        t = t.trim().toLowerCase().replace(/,/g, '');
+        let m = t.match(/([\\d.]+)\\s*([km])?/);
+        if (!m) return 0;
+        let n = parseFloat(m[1]) || 0;
+        if (m[2] === 'k') n *= 1000;
+        if (m[2] === 'm') n *= 1000000;
+        return Math.round(n);
+    };
 
-async def scrape_novel_list(page):    
-    novels = []
-    for i in range(2, 102):
-        img_selector = f'#app > div:nth-child(2) > main > div > div > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-shrink-0 > a > img'
-        title_selector = f'#app > div:nth-child(2) > main > div > div > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-grow.space-y-2 > div.flex.items-center.justify-between.space-x-2 > div.flex.items-center.space-x-2 > a'
-        author_selector = f'#app > div:nth-child(2) > main > div > div > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-grow.space-y-2 > div.flex.justify-between.space-x-2.pt-1 > div > span'
-        max_selector = f'#app > div:nth-child(2) > main > div > div > div:nth-child(4) > div.grid.grid-cols-1.gap-y-6 > div:nth-child({i}) > div.flex-grow.space-y-2 > div.flex.justify-between.space-x-2.pt-1 > span'
-
-        try:
-            # 1. Ảnh: Nằm trong div.flex-shrink-0
-            img = await page.locator(img_selector).get_attribute('src')
-            
-            # 2. Tiêu đề: Thẻ a trong div.flex.items-center.space-x-2
-            title = await page.locator(title_selector).inner_text()
-
-            url = await page.locator(title_selector).get_attribute('href')
-            
-            # 3. Tác giả: Thẻ span đầu tiên trong cụm div cuối
-            author = await page.locator(author_selector).inner_text()
-            
-            # 4. Số chương: Thẻ span cuối cùng (thường là sibling của div chứa author)
-            max_chapter_text = await page.locator(max_selector).inner_text()
-
-            novels.append([
-                url.strip().split("/")[-1],
-                title.strip(),
-                author.strip(),
-                '',                
-                img.strip(),
-                max_chapter_text.strip(),
-                ''
-            ])
-        except Exception as e:
-            print(f"❌ Đã xảy ra lỗi nghiêm trọng: {e}")
-            continue
-    return novels
-
-async def scrape_novel_detail(page):
-    id_selector = '#app > div:nth-child(2) > div > main > div.space-y-5 > div.block.md\\:flex > div.mb-4.mx-auto.text-center.md\\:mx-0.md\\:text-left > div.space-x-4.mb-6.md\\:mb-8 > div'
-    id_selector2 = '#app > div:nth-child(2) > main > div.space-y-5 > div.block.md\\:flex > div.mb-4.mx-auto.text-center.md\\:mx-0.md\\:text-left > div.space-x-4.mb-6.md\\:mb-8 > div'
-    
-    # Khởi tạo tất cả các biến với giá trị mặc định là chuỗi rỗng
-    target_id = ""
-
-    try:        
-        # --- Lấy ID (data-x-data) ---
-        try:
-            data_x_data = await page.locator(id_selector2).get_attribute("data-x-data")
-            if data_x_data:
-                match = re.search(r'\(([^)]+)\)', data_x_data)
-                if match:
-                    target_id = match.group(1).strip()
-                else:
-                    print("⚠️ Không tìm thấy ID trong thuộc tính data-x-data.")
-            else:
-                print("⚠️ Không tìm thấy thuộc tính data-x-data.")
-        except:
-            try:
-                data_x_data = await page.locator(id_selector).get_attribute("data-x-data")
-                if data_x_data:
-                    match = re.search(r'\(([^)]+)\)', data_x_data)
-                    if match:
-                        target_id = match.group(1).strip()
-                    else:
-                        print("⚠️ Không tìm thấy ID trong thuộc tính data-x-data.")
-                else:
-                    print("⚠️ Không tìm thấy thuộc tính data-x-data.")
-            except Exception as e:
-                print(f"⚠️ Lỗi khi lấy ID (data-x-data): {e}")
-        
-        # Trả về dictionary, .strip() bây giờ đã an toàn vì tất cả đều là chuỗi
-        return {
-            "id": target_id.strip()
+    // Lấy con số đứng trước 1 icon cụ thể trong khối .info
+    const infoBy = (item, iconClass) => {
+        for (const sp of item.querySelectorAll('.info span')) {
+            if (sp.querySelector('i.' + iconClass)) return parseNum(sp.textContent);
         }
+        return 0;
+    };
 
-    except Exception as e:
-        # Khối except bên ngoài này sẽ bắt các lỗi thảm họa (ví dụ: page bị đóng)
-        print(f"❌ Lỗi nghiêm trọng khi lấy chi tiết truyện: {e}")
-        return None
+    return Array.from(document.querySelectorAll('a.booksearch')).map(item => {
+        const href = item.getAttribute('href') || '';
+        // href: https://sangtacviet.app/truyen/{host}/1/{bookid}/
+        const parts = href.replace(/https?:\\/\\/[^/]+/, '').split('/').filter(Boolean);
+        const bookHost = parts.length >= 4 ? parts[1] : '';
+        const bookId   = parts.length >= 4 ? parts[3] : '';
+
+        const title  = (item.querySelector('b.searchbooktitle')?.textContent || '').trim();
+        const author = (item.querySelector('span.searchbookauthor')?.textContent || '').trim();
+        const img    = item.querySelector('img')?.getAttribute('src') || '';
+
+        const views    = infoBy(item, 'fa-eye');
+        const likes    = infoBy(item, 'fa-thumbs-up');
+        const chapters = infoBy(item, 'fa-copyright');
+
+        // searchtag đầu là host, tag thứ 2 là trạng thái (Còn Tiếp / Hoàn)
+        const tags = Array.from(item.querySelectorAll(':scope > div > span.searchtag'))
+                          .map(e => e.textContent.trim());
+        const status = tags.length > 1 ? tags[1] : '';
+
+        return { bookId, title, author, bookHost, img, chapters, views, likes, status, href };
+    });
+}
+"""
+
+
+async def scrape_list(page, base_url, pages=PAGES, max_items=MAX_ITEMS):
+    """Cào 1 danh sách (realtime hoặc top tuần) qua nhiều trang."""
+    novels = []
+    seen = set()
+
+    for p in range(1, pages + 1):
+        url = base_url if p == 1 else f"{base_url}&p={p}"
+        print(f"➡️  Đang tải trang {p}: {url}")
+        try:
+            await page.goto(url, wait_until="domcontentloaded")
+            # Kết quả được render bằng JS -> phải chờ thẻ booksearch xuất hiện
+            await page.wait_for_selector("a.booksearch", timeout=30000)
+            await page.wait_for_timeout(800)
+
+            items = await page.evaluate(EXTRACT_JS)
+        except Exception as e:
+            print(f"❌ Lỗi khi tải trang {p}: {e}")
+            continue
+
+        if not items:
+            print(f"⚠️ Trang {p} không có dữ liệu, dừng lại.")
+            break
+
+        new_count = 0
+        for it in items:
+            if not it["bookId"] or not it["title"]:
+                continue
+            key = f'{it["bookHost"]}/{it["bookId"]}'
+            if key in seen:
+                continue
+            seen.add(key)
+            new_count += 1
+
+            novels.append([
+                it["bookId"],       # A - ID truyện
+                it["title"],        # B - Tên truyện
+                it["author"],       # C - Tác giả
+                it["bookHost"],     # D - Nguồn (fanqie / qidian / dich ...)
+                it["img"],          # E - Ảnh bìa
+                it["chapters"],     # F - Số chương
+                it["views"],        # G - Lượt xem
+                it["likes"],        # H - Lượt thích
+                it["status"],       # I - Trạng thái
+                it["href"],         # J - Link truyện
+            ])
+
+            if len(novels) >= max_items:
+                print(f"✅ Đã đủ {max_items} truyện.")
+                return novels
+
+        print(f"   Lấy được {new_count} truyện mới (tổng {len(novels)}).")
+
+    return novels
+
 
 async def main():
-    """
-    Hàm chính điều khiển toàn bộ quá trình: đăng nhập, duyệt và lưu chương.
-    """
-    # Lấy thông tin proxy từ biến môi trường
-    PROXY_SERVER = os.environ.get('PROXY_SERVER')
-    PROXY_USER = os.environ.get('PROXY_USER')
-    PROXY_PASS = os.environ.get('PROXY_PASS')
+    PROXY_SERVER = os.environ.get("PROXY_SERVER")
+    PROXY_USER = os.environ.get("PROXY_USER")
+    PROXY_PASS = os.environ.get("PROXY_PASS")
 
     proxy_settings = None
     if PROXY_SERVER:
         proxy_settings = {
             "server": f"http://{PROXY_SERVER}",
             "username": PROXY_USER,
-            "password": PROXY_PASS
+            "password": PROXY_PASS,
         }
         print(f"--- Đang sử dụng proxy: {PROXY_SERVER} ---")
     else:
-        print("--- Không tìm thấy thông tin proxy, chạy không qua proxy ---")
+        print("--- Không có proxy, chạy trực tiếp ---")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            proxy=proxy_settings
+        browser = await p.chromium.launch(headless=True, proxy=proxy_settings)
+        context = await browser.new_context(
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+            locale="vi-VN",
         )
-        context = await browser.new_context()
         page = await context.new_page()
-        page.set_default_timeout(60000) # 60 giây
+        page.set_default_timeout(60000)
+
         try:
-            # --- PHẦN 1: ĐĂNG NHẬP (Chỉ chạy một lần) ---
-            print("Bắt đầu quá trình đăng nhập...")
-            await page.goto("https://metruyencv.com", wait_until="domcontentloaded")
-            
-            menu_icon_locator = page.locator('svg:has(path[d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"])')
-            await menu_icon_locator.wait_for(state="visible")
-            await menu_icon_locator.click()
-            await page.get_by_role("button", name="Đăng nhập").click()
-            await page.get_by_placeholder("email").fill(LOGIN_EMAIL)
-            await page.get_by_placeholder("password").fill(LOGIN_PASSWORD)
-            await page.get_by_role("button", name="Đăng nhập").click()
-            print("Đăng nhập thành công!")
-            # --- PHẦN 0: KẾT NỐI VÀ KIỂM TRA GOOGLE SHEET ---
             print("Đang kết nối tới Google Sheets...")
             gc = gspread.service_account(filename=CREDENTIALS_FILE)
             sh = gc.open_by_url(GOOGLE_SHEET_NAME)
             print("Kết nối thành công!")
 
-            # Mở hoặc tạo sheet Database_ID để tra cứu
-            try:
-                ws_db = sh.worksheet("Database_ID")
-            except gspread.WorksheetNotFound:
-                ws_db = sh.add_worksheet(title="Database_ID", rows="1000", cols="2")
-                ws_db.append_row(['Url', 'ID'])
+            header = ["ID", "Tên truyện", "Tác giả", "Nguồn", "Ảnh",
+                      "Số chương", "Lượt xem", "Lượt thích", "Trạng thái", "Link"]
 
-            # 2. Tải dữ liệu ID đã có vào Dictionary để tra cứu cực nhanh
-            existing_data = ws_db.get_all_values()[1:] # Bỏ header
-            id_map = {row[0]: row[1] for row in existing_data if len(row) >= 2}
+            def get_ws(name):
+                try:
+                    ws = sh.worksheet(name)
+                except gspread.WorksheetNotFound:
+                    ws = sh.add_worksheet(title=name, rows="500", cols="12")
+                ws.update(range_name="A1", values=[header])
+                return ws
 
-            # --- XỬ LÝ TRANG THỜI GIAN THỰC ---
-            print("Đang lấy danh sách truyện thời gian thực...")
-            await page.goto("https://metruyencv.com/thoi-gian-thuc", wait_until="domcontentloaded")
+            # --- 1. DANH SÁCH THỜI GIAN THỰC (mới cập nhật) ---
+            print("\n=== Đang lấy danh sách THỜI GIAN THỰC ===")
+            realtime = await scrape_list(page, URL_REALTIME)
+            if realtime:
+                ws = get_ws("list_realtime")
+                ws.batch_clear(["A2:J1000"])
+                ws.update(range_name="A2", values=realtime)
+                print(f"✅ Đã ghi {len(realtime)} truyện vào list_realtime.")
 
-            # Lấy dữ liệu từ hàm đã viết
-            novel_list_data = await scrape_novel_list(page)
-
-            new_ids_to_save = []
-
-            # 4. Duyệt và kiểm tra
-            for novel in novel_list_data:
-                url = novel[0]
-                
-                if url in id_map:
-                    # Nếu đã có ID rồi thì lấy luôn, không cần truy cập link
-                    novel.append(id_map[url])
-                    print(f"⏩ Đã có ID cho: {novel[1]} (Bỏ qua)")
-                else:
-                    # Nếu chưa có mới truy cập
-                    print(f"🔍 Đang cào ID mới cho: {novel[1]}")
-                    try:
-                        response = await page.goto('https://metruyencv.com/truyen/'+url, wait_until="domcontentloaded")
-                        if response and response.status == 404:
-                            continue
-                        scraped_data = await scrape_novel_detail(page)
-                        if scraped_data and scraped_data['id']:
-                            target_id = scraped_data['id']
-                            novel.append(target_id)
-                            # Thêm vào danh sách để cập nhật Database
-                            new_ids_to_save.append([url, target_id])
-                            id_map[url] = target_id # Cập nhật map để tránh trùng trong cùng 1 phiên
-                        else:
-                            novel.append("")
-                    except Exception as e:
-                        print(f"❌ Lỗi khi cào {url}: {e}")
-                        novel.append("")            
-
-            # 6. Ghi kết quả cuối cùng vào sheet list_realtime (Ghi đè nội dung mới nhất)
-            ws_realtime = sh.worksheet("list_realtime")
-            ws_realtime.update(range_name='A2', values=novel_list_data)
-
-
-            # --- XỬ LÝ TRANG TOP ---
-            print("Đang lấy danh sách truyện top...")
-            await page.goto("https://metruyencv.com/xep-hang/de-cu", wait_until="domcontentloaded")
-
-            for i in range(5):
-                # Lấy dữ liệu từ hàm đã viết
-                novel_list_data = await scrape_novel_top(page)            
-
-                for novel in novel_list_data:
-                    url = novel[0]
-                    if url in id_map:
-                        # Nếu đã có ID rồi thì lấy luôn, không cần truy cập link
-                        novel.append(id_map[url])
-                        print(f"⏩ Đã có ID cho: {novel[1]} (Bỏ qua)")
-                    elif url in new_ids_to_save:
-                        novel.append(id_map[url])
-                        print(f"⏩ Đã có ID cho: {novel[1]} (Bỏ qua)")
-                    else:
-                        # Nếu chưa có mới truy cập
-                        print(f"🔍 Đang cào ID mới cho: {novel[1]}")
-                        try:
-                            response = await page.goto('https://metruyencv.com/truyen/'+url, wait_until="domcontentloaded")
-                            if response and response.status == 404:
-                                continue
-                            scraped_data = await scrape_novel_detail(page)
-                            if scraped_data and scraped_data['id']:
-                                target_id = scraped_data['id']
-                                novel.append(target_id)
-                                # Thêm vào danh sách để cập nhật Database
-                                new_ids_to_save.append([url, target_id])
-                                id_map[url] = target_id # Cập nhật map để tránh trùng trong cùng 1 phiên
-                            else:
-                                novel.append("")
-                        except Exception as e:
-                            print(f"❌ Lỗi khi cào {url}: {e}")
-                            novel.append("")
-                
-                ws_realtime = sh.worksheet("list_top")
-                ws_realtime.update(range_name=f'A{20*i+2}', values=novel_list_data)
-
-                if i < 4:
-                    await page.goto("https://metruyencv.com/xep-hang/de-cu", wait_until="domcontentloaded")
-                    for _ in range(i+1):
-                        await page.locator('svg:has(path[d="M9 6l6 6l-6 6"])').click()
-            # 5. Cập nhật ID mới vào sheet Database_ID (Ghi nối tiếp vào cuối)
-            if new_ids_to_save:
-                ws_db.append_rows(new_ids_to_save)
-                print(f"✅ Đã lưu thêm {len(new_ids_to_save)} ID mới vào Database.")
+            # --- 2. DANH SÁCH TOP ĐỌC TUẦN ---
+            print("\n=== Đang lấy danh sách TOP ĐỌC TUẦN ===")
+            topweek = await scrape_list(page, URL_TOPWEEK)
+            if topweek:
+                ws = get_ws("list_top")
+                ws.batch_clear(["A2:J1000"])
+                ws.update(range_name="A2", values=topweek)
+                print(f"✅ Đã ghi {len(topweek)} truyện vào list_top.")
 
         except Exception as e:
             print(f"❌ Đã xảy ra lỗi nghiêm trọng: {e}")
             try:
-                await page.screenshot(path='screenshots/00_ERROR.png')
+                os.makedirs("screenshots", exist_ok=True)
+                await page.screenshot(path="screenshots/00_ERROR.png", full_page=True)
                 print("Đã chụp ảnh màn hình lỗi.")
-            except Exception as screenshot_error:
-                print(f"Không thể chụp ảnh màn hình: {screenshot_error}")
+            except Exception as se:
+                print(f"Không thể chụp ảnh màn hình: {se}")
 
         finally:
             print("\nQuá trình đã hoàn tất. Đóng trình duyệt.")
             await browser.close()
 
-# Chạy script
+
 if __name__ == "__main__":
     asyncio.run(main())
